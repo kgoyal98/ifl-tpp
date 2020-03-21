@@ -10,12 +10,10 @@ from dpp.nn import BaseModule
 
 class Model(BaseModule):
     """Base model class.
-
     Attributes:
-        rnn: RNN for encoding the event history.
+        hist_embed: Encoder for embedding history, can be RNN or trannsformer.
         embedding: Retrieve static embedding for each sequence.
         decoder: Compute log-likelihood of the inter-event times given hist and emb.
-
     Args:
         config: General model configuration (see dpp.model.ModelConfig).
         decoder: Model for computing log probability of t given history and embeddings.
@@ -27,7 +25,11 @@ class Model(BaseModule):
         self.use_embedding(config.use_embedding)
         self.use_marks(config.use_marks)
 
-        self.rnn = dpp.nn.RNNLayer(config)
+        if(config.use_transformer_encoder):
+          self.hist_embed = TransformerLayer(config)
+        else:
+          self.hist_embed = RNNLayer(config)
+
         if self.using_embedding:
             self.embedding = nn.Embedding(config.num_embeddings, config.embedding_size)
             self.embedding.weight.data.fill_(0.0)
@@ -44,11 +46,9 @@ class Model(BaseModule):
 
     def mark_nll(self, h, y):
         """Compute log likelihood and accuracy of predicted marks
-
         Args:
             h: History vector
             y: Out marks, true label
-
         Returns:
             loss: Negative log-likelihood for marks, shape (batch_size, seq_len)
             accuracy: Percentage of correctly classified marks
@@ -61,18 +61,16 @@ class Model(BaseModule):
 
     def log_prob(self, input):
         """Compute log likelihood of the inter-event timesi in the batch.
-
         Args:
             input: Batch of data to score. See dpp.data.Input.
-
         Returns:
             time_log_prob: Log likelihood of each data point, shape (batch_size, seq_len)
             mark_nll: Negative log likelihood of marks, if using_marks is True
             accuracy: Accuracy of marks, if using_marks is True
         """
-        # Encode the history with an RNN
+        # Encode the history
         if self.using_history:
-            h = self.rnn(input) # has shape (batch_size, seq_len, rnn_hidden_size)
+            h = self.hist_embed(input) # has shape (batch_size, seq_len, hidden_size)
         else:
             h = None
         # Get sequence embedding
@@ -93,16 +91,13 @@ class Model(BaseModule):
 
     def aggregate(self, values, lengths):
         """Calculate masked average of values.
-
         Sequences may have different lengths, so it's necessary to exclude
         the masked values in the padded sequence when computing the average.
-
         Arguments:
             values (list[tensor]): List of batches where each batch contains
                 padded values, shape (batch size, sequence length)
             lengths (list[tensor]): List of batches where each batch contains
                 lengths of sequences in a batch, shape (batch size)
-
         Returns:
             mean (float): Average value in values taking padding into account
         """
@@ -130,11 +125,9 @@ class Model(BaseModule):
 
 class ModelConfig(DotDict):
     """Configuration of the model.
-
     This config only contains parameters that need to be know by all the
     submodules. Submodule-specific parameters are passed to the respective
     constructors.
-
     Args:
         use_history: Should the model use the history embedding?
         history_size: Dimension of the history embedding.
@@ -145,6 +138,9 @@ class ModelConfig(DotDict):
         use_marks: Should the model use the marks?
         mark_embedding_size: Dimension of the mark embedding.
         num_classes: Number of unique mark types, used as dimension of output
+        use_transformer_enncoder: Whether to use the transformer encoder
+        nhead: The number of attention heads in transformer encoder
+        num_layers: The number of transformer encoders to be stacked
     """
     def __init__(self,
                  use_history=True,
@@ -155,12 +151,20 @@ class ModelConfig(DotDict):
                  num_embeddings=None,
                  use_marks=False,
                  mark_embedding_size=64,
-                 num_classes=None):
+                 num_classes=None,
+                 use_transformer_encoder=False,
+                 nhead=8,
+                 num_layers=6):
         super().__init__()
         # RNN parameters
         self.use_history = use_history
         self.history_size = history_size
         self.rnn_type = rnn_type
+
+        # Transformer parameters
+        self.use_transformer_encoder = use_transformer_encoder
+        self.nhead = nhead
+        self.num_layers = num_layers
 
         # Sequence embedding parameters
         self.use_embedding = use_embedding

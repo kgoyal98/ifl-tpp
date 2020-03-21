@@ -9,26 +9,28 @@ torch.set_default_tensor_type(torch.cuda.FloatTensor)
 
 ### Config
 
-seed = 0
+seed = 1
 np.random.seed(seed)
 torch.manual_seed(seed)
 
 ## General data config
-dataset_name = 'synth/hawkes2' # other: [ 'yelp_toronto', 'wikipedia', 'mooc', 'stack_overflow', 'lastfm',
-                               #          'reddit', 'synth/poisson', 'synth/renewal', 'synth/self_correcting',
+dataset_name = 'synth/hawkes2' # other: [ 'yelp_toronto', 'wikipedia', 'mooc', 'stack_overflow', 'lastfm',  
+                               #          'reddit', 'synth/poisson', 'synth/renewal', 'synth/self_correcting', 
                                #          'synth/hawkes1', 'synth/hawkes2']
 
 split = 'whole_sequences' # How to split the sequences (other 'each_sequence' -- split every seq. into train/val/test)
 
 ## General model config
-use_history = True        # Whether to use RNN to encode history
-history_size = 64         # Size of the RNN hidden vector
-rnn_type = 'RNN'          # Which RNN cell to use (other: ['GRU', 'LSTM'])
-use_embedding = False     # Whether to use sequence embedding (should use with 'each_sequence' split)
-embedding_size = 32       # Size of the sequence embedding vector
-                          # IMPORTANT: when using split = 'whole_sequences', the model will only learn embeddings
-                          # for the training sequences, and not for validation / test
-trainable_affine = False  # Train the final affine layer
+use_history = True               # Whether to use RNN to encode history
+history_size = 64                # Size of the RNN hidden vector
+rnn_type = 'RNN'                 # Which RNN cell to use (other: ['GRU', 'LSTM'])
+use_embedding = False            # Whether to use sequence embedding (should use with 'each_sequence' split)
+embedding_size = 32              # Size of the sequence embedding vector
+                                 # IMPORTANT: when using split = 'whole_sequences', the model will only learn embeddings
+                                 # for the training sequences, and not for validation / test
+trainable_affine = False         # Train the final affine layer
+nhead = 8                        # Number of attention heads in the transformer layer
+num_layers = 6                   # Number of transformer encoders to be stacked
 
 ## Decoder config
 decoder_name = 'LogNormMix' # other: ['RMTPP', 'FullyNeuralNet', 'Exponential', 'SOSPolynomial', 'DeepSigmoidalFlow']
@@ -97,20 +99,22 @@ else:
 
 
 ### Model setup
-print('Building model...')
-
+#@title Model Config 1 (Using transformers)
 # General model config
-general_config = dpp.model.ModelConfig(
+general_config_transformer = ModelConfig(
     use_history=use_history,
     history_size=history_size,
     rnn_type=rnn_type,
     use_embedding=use_embedding,
     embedding_size=embedding_size,
     num_embeddings=len(dataset),
+    use_transformer_encoder=True,
+    nhead=nhead,
+    num_layers=num_layers
 )
 
 # Decoder specific config
-decoder = getattr(dpp.decoders, decoder_name)(general_config,
+decoder_transformer = getattr(dpp.decoders, decoder_name)(general_config_transformer,
                                               n_components=n_components,
                                               hypernet_hidden_sizes=hypernet_hidden_sizes,
                                               max_degree=max_degree,
@@ -122,13 +126,43 @@ decoder = getattr(dpp.decoders, decoder_name)(general_config,
                                               trainable_affine=trainable_affine)
 
 # Define model
-model = dpp.model.Model(general_config, decoder)
-model.use_history(general_config.use_history)
-model.use_embedding(general_config.use_embedding)
+model_transformer = Model(general_config_transformer, decoder_transformer)
+model_transformer.use_history(general_config_transformer.use_history)
+model_transformer.use_embedding(general_config_transformer.use_embedding)
 
 # Define optimizer
-opt = torch.optim.Adam(model.parameters(), weight_decay=regularization, lr=learning_rate)
+opt_transformer = torch.optim.Adam(model_transformer.parameters(), weight_decay=regularization, lr=learning_rate)
 
+#@title Model Config 2 (Using RNNs)
+# General model config
+general_config_rnn = ModelConfig(
+    use_history=use_history,
+    history_size=history_size,
+    rnn_type=rnn_type,
+    use_embedding=use_embedding,
+    embedding_size=embedding_size,
+    num_embeddings=len(dataset)
+)
+
+# Decoder specific config
+decoder_rnn = getattr(dpp.decoders, decoder_name)(general_config_rnn,
+                                              n_components=n_components,
+                                              hypernet_hidden_sizes=hypernet_hidden_sizes,
+                                              max_degree=max_degree,
+                                              n_terms=n_terms,
+                                              n_layers=n_layers,
+                                              layer_size=layer_size,
+                                              shift_init=mean_out_train,
+                                              scale_init=std_out_train,
+                                              trainable_affine=trainable_affine)
+
+# Define model
+model_rnn = Model(general_config_rnn, decoder_rnn)
+model_rnn.use_history(general_config_rnn.use_history)
+model_rnn.use_embedding(general_config_rnn.use_embedding)
+
+# Define optimizer
+opt_rnn = torch.optim.Adam(model_rnn.parameters(), weight_decay=regularization, lr=learning_rate)
 
 ### Traning
 print('Starting training...')
@@ -141,32 +175,70 @@ def get_total_loss(loader):
         loader_lengths.append(input.length.detach())
     return -model.aggregate(loader_log_prob, loader_lengths)
 
+#@title Training Transformer Model
 impatient = 0
 best_loss = np.inf
-best_model = deepcopy(model.state_dict())
-training_val_losses = []
+best_model_transformer = deepcopy(model_transformer.state_dict())
+training_val_losses_transformer = []
 
 for epoch in range(max_epochs):
-    model.train()
+    model_transformer.train()
     for input in dl_train:
-        opt.zero_grad()
-        log_prob = model.log_prob(input)
-        loss = -model.aggregate(log_prob, input.length)
+        opt_transformer.zero_grad()
+        log_prob = model_transformer.log_prob(input)
+        loss = -model_transformer.aggregate(log_prob, input.length)
         loss.backward()
-        opt.step()
+        opt_transformer.step()
 
-    model.eval()
-    loss_val = get_total_loss(dl_val)
-    training_val_losses.append(loss_val.item())
+    model_transformer.eval()
+    loss_val = get_total_loss(dl_val,model_transformer)
+    training_val_losses_transformer.append(loss_val.item())
 
     if (best_loss - loss_val) < 1e-4:
         impatient += 1
         if loss_val < best_loss:
             best_loss = loss_val.item()
-            best_model = deepcopy(model.state_dict())
+            best_model_transformer = deepcopy(model_transformer.state_dict())
     else:
         best_loss = loss_val.item()
-        best_model = deepcopy(model.state_dict())
+        best_model_transformer = deepcopy(model_transformer.state_dict())
+        impatient = 0
+
+    if impatient >= patience:
+        print(f'Breaking due to early stopping at epoch {epoch}')
+        break
+
+    if (epoch + 1) % display_step == 0:
+        print(f"Epoch {epoch+1:4d}, loss_train_last_batch = {loss:.4f}, loss_val = {loss_val:.4f}")
+
+#@title Training RNN Model
+#@title Training Transformer Model
+impatient = 0
+best_loss = np.inf
+best_model_rnn = deepcopy(model_rnn.state_dict())
+training_val_losses_rnn = []
+
+for epoch in range(max_epochs):
+    model_rnn.train()
+    for input in dl_train:
+        opt_rnn.zero_grad()
+        log_prob = model_rnn.log_prob(input)
+        loss = -model_rnn.aggregate(log_prob, input.length)
+        loss.backward()
+        opt_rnn.step()
+
+    model_rnn.eval()
+    loss_val = get_total_loss(dl_val,model_rnn)
+    training_val_losses_rnn.append(loss_val.item())
+
+    if (best_loss - loss_val) < 1e-4:
+        impatient += 1
+        if loss_val < best_loss:
+            best_loss = loss_val.item()
+            best_model_rnn = deepcopy(model_rnn.state_dict())
+    else:
+        best_loss = loss_val.item()
+        best_model_rnn = deepcopy(model_rnn.state_dict())
         impatient = 0
 
     if impatient >= patience:
@@ -178,14 +250,27 @@ for epoch in range(max_epochs):
 
 ### Evaluation
 
-model.load_state_dict(best_model)
-model.eval()
+model_transformer.load_state_dict(best_model_transformer)
+model_transformer.eval()
 
-pdf_loss_train = get_total_loss(dl_train)
-pdf_loss_val = get_total_loss(dl_val)
-pdf_loss_test = get_total_loss(dl_test)
+pdf_loss_train = get_total_loss(dl_train,model_transformer)
+pdf_loss_val = get_total_loss(dl_val,model_transformer)
+pdf_loss_test = get_total_loss(dl_test,model_transformer)
 
 print(f'Time NLL\n'
-      f' - Train: {pdf_loss_train:.4f}\n'
-      f' - Val:   {pdf_loss_val.item():.4f}\n'
-      f' - Test:  {pdf_loss_test.item():.4f}')
+      f'Train: {pdf_loss_train:.4f}\n'
+      f'Val:   {pdf_loss_val.item():.4f}\n' 
+      f'Test:  {pdf_loss_test.item():.4f}')
+
+
+model_rnn.load_state_dict(best_model_rnn)
+model_rnn.eval()
+
+pdf_loss_train = get_total_loss(dl_train,model_rnn)
+pdf_loss_val = get_total_loss(dl_val,model_rnn)
+pdf_loss_test = get_total_loss(dl_test,model_rnn)
+
+print(f'Time NLL\n'
+      f'Train: {pdf_loss_train:.4f}\n'
+      f'Val:   {pdf_loss_val.item():.4f}\n' 
+      f'Test:  {pdf_loss_test.item():.4f}')

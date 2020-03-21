@@ -1,10 +1,8 @@
 import torch
 import torch.nn as nn
 
-
 class BaseModule(nn.Module):
     """Wrapper around nn.Module that recursively sets history and embedding usage.
-
     All modules should inherit from this class.
     """
     def __init__(self):
@@ -46,8 +44,6 @@ class BaseModule(nn.Module):
             if isinstance(module, BaseModule):
                 module.use_marks(mode)
 
-
-
 class RNNLayer(BaseModule):
     """RNN for encoding the event history."""
     def __init__(self, config):
@@ -71,13 +67,12 @@ class RNNLayer(BaseModule):
 
     def forward(self, input):
         """Encode the history of the given batch.
-
         Returns:
             h: History encoding, shape (batch_size, seq_len, self.hidden_size)
         """
         t = input.in_time
+        # print("t shape ",t.shape)
         length = input.length
-
         if not self.using_history:
             return torch.zeros(t.shape[0], t.shape[1], self.hidden_size)
 
@@ -94,11 +89,15 @@ class RNNLayer(BaseModule):
             # RNN and GRU have one hidden state
             h0 = torch.zeros(h_shape)
 
+        # print("RNN input before packing ",x.shape)
         x, batch_sizes = torch._C._VariableFunctions._pack_padded_sequence(x, length.cpu().long(), batch_first=True)
         x = torch.nn.utils.rnn.PackedSequence(x, batch_sizes)
-
+        # print("RNN input shape x.data ", x.data.shape)
+        # print("RNN input shape x.batch_sizes ", x.batch_sizes.shape)
+        # print("RNN input shape h0 ", h0.shape)
         h, _ = self.rnn(x, h0)
         h, _ = torch.nn.utils.rnn.pad_packed_sequence(h, batch_first=True)
+        # print("RNN output shape ",h.shape)
         return h
 
     def step(self, x, h):
@@ -106,10 +105,53 @@ class RNNLayer(BaseModule):
         y, h = self.rnn(x, h)
         return y, h
 
+class TransformerLayer(BaseModule):
+    """Transformer for encoding the event history."""
+
+    def __init__(self, config):
+        super().__init__()
+        self.hidden_size = config.history_size
+        self.use_history(config.use_history)
+        self.use_marks(config.use_marks)
+
+        if config.use_marks:
+            # Define mark embedding layer
+            self.mark_embedding = nn.Embedding(config.num_classes, config.mark_embedding_size)
+            # If we have marks, input is time + mark embedding vector
+            self.in_features = config.mark_embedding_size + 1
+        else:
+            # Without marks, input is only time
+            self.in_features = 1
+
+        #Defining a transformation for embedding
+        self.embed_hist = nn.Linear(self.in_features,self.hidden_size)
+
+        # Defining the transformer encoder
+        self.encoder_layer = nn.TransformerEncoderLayer(d_model=self.hidden_size, nhead=config.nhead)
+        self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=config.num_layers)
+
+    def forward(self, input):
+        """Encode the history of the given batch.
+        Returns:
+            h: History encoding, shape (batch_size, seq_len, self.hidden_size)
+        """
+        t = input.in_time
+        length = input.length
+        if not self.using_history:
+            return torch.zeros(t.shape[0], t.shape[1], self.hidden_size)
+
+        x = t.unsqueeze(-1)
+        if self.using_marks:
+            mark = self.mark_embedding(input.in_mark)
+            x = torch.cat([x, mark], -1)
+        
+        out1 = self.embed_hist(x)
+        out2 = self.transformer_encoder(out1)
+        return out2
+
 
 class Hypernet(nn.Module):
     """Hypernetwork for incorporating conditional information.
-
     Args:
         config: Model configuration. See `dpp.model.ModelConfig`.
         hidden_sizes: Sizes of the hidden layers. [] corresponds to a linear layer.
@@ -154,11 +196,9 @@ class Hypernet(nn.Module):
 
     def forward(self, h=None, emb=None):
         """Generate model parameters from the embeddings.
-
         Args:
             h: History embedding, shape (*, history_size)
             emb: Sequence embedding, shape (*, embedding_size)
-
         Returns:
             params: Tuple of model parameters.
         """
