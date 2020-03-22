@@ -26,9 +26,9 @@ class Model(BaseModule):
         self.use_marks(config.use_marks)
 
         if(config.use_transformer_encoder):
-          self.hist_embed = TransformerLayer(config)
+          self.hist_embed = dpp.nn.TransformerLayer(config)
         else:
-          self.hist_embed = RNNLayer(config)
+          self.hist_embed = dpp.nn.RNNLayer(config)
 
         if self.using_embedding:
             self.embedding = nn.Embedding(config.num_embeddings, config.embedding_size)

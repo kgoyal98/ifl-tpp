@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.distributions as td
 from copy import deepcopy
-torch.set_default_tensor_type(torch.cuda.FloatTensor)
+# torch.set_default_tensor_type(torch.cuda.FloatTensor)
 
 
 ### Config
@@ -29,6 +29,8 @@ embedding_size = 32              # Size of the sequence embedding vector
                                  # IMPORTANT: when using split = 'whole_sequences', the model will only learn embeddings
                                  # for the training sequences, and not for validation / test
 trainable_affine = False         # Train the final affine layer
+
+use_transformer_encoder          # Whether to use transformer to encode history
 nhead = 8                        # Number of attention heads in the transformer layer
 num_layers = 6                   # Number of transformer encoders to be stacked
 
@@ -49,7 +51,7 @@ layer_size = 64 # Number of mixture components / units in a layer for DSF and Fu
 regularization = 1e-5 # L2 regularization parameter
 learning_rate = 1e-3  # Learning rate for Adam optimizer
 max_epochs = 1000     # For how many epochs to train
-display_step = 50     # Display training statistics after every display_step
+display_step = 1      # Display training statistics after every display_step
 patience = 50         # After how many consecutive epochs without improvement of val loss to stop training
 
 
@@ -97,24 +99,21 @@ else:
     mean_out_train, std_out_train = d_train.get_log_mean_std_out()
 
 
-
-### Model setup
-#@title Model Config 1 (Using transformers)
 # General model config
-general_config_transformer = ModelConfig(
+general_config = dpp.model.ModelConfig(
     use_history=use_history,
     history_size=history_size,
     rnn_type=rnn_type,
     use_embedding=use_embedding,
     embedding_size=embedding_size,
     num_embeddings=len(dataset),
-    use_transformer_encoder=True,
+    use_transformer_encoder=use_transformer_encoder,
     nhead=nhead,
     num_layers=num_layers
 )
 
 # Decoder specific config
-decoder_transformer = getattr(dpp.decoders, decoder_name)(general_config_transformer,
+decoder = getattr(dpp.decoders, decoder_name)(general_config,
                                               n_components=n_components,
                                               hypernet_hidden_sizes=hypernet_hidden_sizes,
                                               max_degree=max_degree,
@@ -126,43 +125,13 @@ decoder_transformer = getattr(dpp.decoders, decoder_name)(general_config_transfo
                                               trainable_affine=trainable_affine)
 
 # Define model
-model_transformer = Model(general_config_transformer, decoder_transformer)
-model_transformer.use_history(general_config_transformer.use_history)
-model_transformer.use_embedding(general_config_transformer.use_embedding)
+model = dpp.model.Model(general_config, decoder)
+model.use_history(general_config.use_history)
+model.use_embedding(general_config.use_embedding)
 
 # Define optimizer
-opt_transformer = torch.optim.Adam(model_transformer.parameters(), weight_decay=regularization, lr=learning_rate)
+opt = torch.optim.Adam(model.parameters(), weight_decay=regularization, lr=learning_rate)
 
-#@title Model Config 2 (Using RNNs)
-# General model config
-general_config_rnn = ModelConfig(
-    use_history=use_history,
-    history_size=history_size,
-    rnn_type=rnn_type,
-    use_embedding=use_embedding,
-    embedding_size=embedding_size,
-    num_embeddings=len(dataset)
-)
-
-# Decoder specific config
-decoder_rnn = getattr(dpp.decoders, decoder_name)(general_config_rnn,
-                                              n_components=n_components,
-                                              hypernet_hidden_sizes=hypernet_hidden_sizes,
-                                              max_degree=max_degree,
-                                              n_terms=n_terms,
-                                              n_layers=n_layers,
-                                              layer_size=layer_size,
-                                              shift_init=mean_out_train,
-                                              scale_init=std_out_train,
-                                              trainable_affine=trainable_affine)
-
-# Define model
-model_rnn = Model(general_config_rnn, decoder_rnn)
-model_rnn.use_history(general_config_rnn.use_history)
-model_rnn.use_embedding(general_config_rnn.use_embedding)
-
-# Define optimizer
-opt_rnn = torch.optim.Adam(model_rnn.parameters(), weight_decay=regularization, lr=learning_rate)
 
 ### Traning
 print('Starting training...')
@@ -175,70 +144,32 @@ def get_total_loss(loader):
         loader_lengths.append(input.length.detach())
     return -model.aggregate(loader_log_prob, loader_lengths)
 
-#@title Training Transformer Model
 impatient = 0
 best_loss = np.inf
-best_model_transformer = deepcopy(model_transformer.state_dict())
-training_val_losses_transformer = []
+best_model = deepcopy(model.state_dict())
+training_val_losses = []
 
 for epoch in range(max_epochs):
-    model_transformer.train()
+    model.train()
     for input in dl_train:
-        opt_transformer.zero_grad()
-        log_prob = model_transformer.log_prob(input)
-        loss = -model_transformer.aggregate(log_prob, input.length)
+        opt.zero_grad()
+        log_prob = model.log_prob(input)
+        loss = -model.aggregate(log_prob, input.length)
         loss.backward()
-        opt_transformer.step()
+        opt.step()
 
-    model_transformer.eval()
-    loss_val = get_total_loss(dl_val,model_transformer)
-    training_val_losses_transformer.append(loss_val.item())
+    model.eval()
+    loss_val = get_total_loss(dl_val)
+    training_val_losses.append(loss_val.item())
 
     if (best_loss - loss_val) < 1e-4:
         impatient += 1
         if loss_val < best_loss:
             best_loss = loss_val.item()
-            best_model_transformer = deepcopy(model_transformer.state_dict())
+            best_model = deepcopy(model.state_dict())
     else:
         best_loss = loss_val.item()
-        best_model_transformer = deepcopy(model_transformer.state_dict())
-        impatient = 0
-
-    if impatient >= patience:
-        print(f'Breaking due to early stopping at epoch {epoch}')
-        break
-
-    if (epoch + 1) % display_step == 0:
-        print(f"Epoch {epoch+1:4d}, loss_train_last_batch = {loss:.4f}, loss_val = {loss_val:.4f}")
-
-#@title Training RNN Model
-#@title Training Transformer Model
-impatient = 0
-best_loss = np.inf
-best_model_rnn = deepcopy(model_rnn.state_dict())
-training_val_losses_rnn = []
-
-for epoch in range(max_epochs):
-    model_rnn.train()
-    for input in dl_train:
-        opt_rnn.zero_grad()
-        log_prob = model_rnn.log_prob(input)
-        loss = -model_rnn.aggregate(log_prob, input.length)
-        loss.backward()
-        opt_rnn.step()
-
-    model_rnn.eval()
-    loss_val = get_total_loss(dl_val,model_rnn)
-    training_val_losses_rnn.append(loss_val.item())
-
-    if (best_loss - loss_val) < 1e-4:
-        impatient += 1
-        if loss_val < best_loss:
-            best_loss = loss_val.item()
-            best_model_rnn = deepcopy(model_rnn.state_dict())
-    else:
-        best_loss = loss_val.item()
-        best_model_rnn = deepcopy(model_rnn.state_dict())
+        best_model = deepcopy(model.state_dict())
         impatient = 0
 
     if impatient >= patience:
@@ -250,27 +181,14 @@ for epoch in range(max_epochs):
 
 ### Evaluation
 
-model_transformer.load_state_dict(best_model_transformer)
-model_transformer.eval()
+model.load_state_dict(best_model)
+model.eval()
 
-pdf_loss_train = get_total_loss(dl_train,model_transformer)
-pdf_loss_val = get_total_loss(dl_val,model_transformer)
-pdf_loss_test = get_total_loss(dl_test,model_transformer)
-
-print(f'Time NLL\n'
-      f'Train: {pdf_loss_train:.4f}\n'
-      f'Val:   {pdf_loss_val.item():.4f}\n' 
-      f'Test:  {pdf_loss_test.item():.4f}')
-
-
-model_rnn.load_state_dict(best_model_rnn)
-model_rnn.eval()
-
-pdf_loss_train = get_total_loss(dl_train,model_rnn)
-pdf_loss_val = get_total_loss(dl_val,model_rnn)
-pdf_loss_test = get_total_loss(dl_test,model_rnn)
+pdf_loss_train = get_total_loss(dl_train)
+pdf_loss_val = get_total_loss(dl_val)
+pdf_loss_test = get_total_loss(dl_test)
 
 print(f'Time NLL\n'
-      f'Train: {pdf_loss_train:.4f}\n'
-      f'Val:   {pdf_loss_val.item():.4f}\n' 
-      f'Test:  {pdf_loss_test.item():.4f}')
+      f' - Train: {pdf_loss_train:.4f}\n'
+      f' - Val:   {pdf_loss_val.item():.4f}\n'
+      f' - Test:  {pdf_loss_test.item():.4f}')
