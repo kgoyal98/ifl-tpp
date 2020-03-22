@@ -21,18 +21,18 @@ dataset_name = 'synth/hawkes2' # other: [ 'yelp_toronto', 'wikipedia', 'mooc', '
 split = 'whole_sequences' # How to split the sequences (other 'each_sequence' -- split every seq. into train/val/test)
 
 ## General model config
-use_history = True               # Whether to use RNN to encode history
-history_size = 64                # Size of the RNN hidden vector
-rnn_type = 'RNN'                 # Which RNN cell to use (other: ['GRU', 'LSTM'])
-use_embedding = False            # Whether to use sequence embedding (should use with 'each_sequence' split)
-embedding_size = 32              # Size of the sequence embedding vector
-                                 # IMPORTANT: when using split = 'whole_sequences', the model will only learn embeddings
-                                 # for the training sequences, and not for validation / test
-trainable_affine = False         # Train the final affine layer
+use_history = True                # Whether to use RNN to encode history
+history_size = 64                 # Size of the RNN hidden vector
+rnn_type = 'RNN'                  # Which RNN cell to use (other: ['GRU', 'LSTM'])
+use_embedding = False             # Whether to use sequence embedding (should use with 'each_sequence' split)
+embedding_size = 32               # Size of the sequence embedding vector
+                                  # IMPORTANT: when using split = 'whole_sequences', the model will only learn embeddings
+                                  # for the training sequences, and not for validation / test
+trainable_affine = False          # Train the final affine layer
 
-use_transformer_encoder          # Whether to use transformer to encode history
-nhead = 8                        # Number of attention heads in the transformer layer
-num_layers = 6                   # Number of transformer encoders to be stacked
+use_transformer_encoder = False   # Whether to use transformer to encode history
+nhead = 8                         # Number of attention heads in the transformer layer
+num_layers = 6                    # Number of transformer encoders to be stacked
 
 ## Decoder config
 decoder_name = 'LogNormMix' # other: ['RMTPP', 'FullyNeuralNet', 'Exponential', 'SOSPolynomial', 'DeepSigmoidalFlow']
@@ -135,6 +135,12 @@ opt = torch.optim.Adam(model.parameters(), weight_decay=regularization, lr=learn
 
 ### Traning
 print('Starting training...')
+if(use_history):
+  if(use_transformer_encoder):
+    print("Using transformer history embeddings")
+  else:
+    print("Using RNN history embeddings")
+
 
 # Function that calculates the loss for the entire dataloader
 def get_total_loss(loader):
