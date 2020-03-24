@@ -105,6 +105,7 @@ class RNNLayer(BaseModule):
         y, h = self.rnn(x, h)
         return y, h
 
+
 class TransformerLayer(BaseModule):
     """Transformer for encoding the event history."""
 
@@ -146,8 +147,8 @@ class TransformerLayer(BaseModule):
             mark = self.mark_embedding(input.in_mark)
             x = torch.cat([x, mark], -1)
         
-        out1 = self.embed_hist(x)
-        out2 = self.embed_hist(out1)
+        out1 = self.embed_hist1(x)
+        out2 = self.embed_hist2(out1)
         out3 = self.transformer_encoder(out2)
         return out3
 
