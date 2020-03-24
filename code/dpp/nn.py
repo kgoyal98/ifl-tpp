@@ -124,7 +124,8 @@ class TransformerLayer(BaseModule):
             self.in_features = 1
 
         #Defining a transformation for embedding
-        self.embed_hist = nn.Linear(self.in_features,self.hidden_size)
+        self.embed_hist1 = nn.Linear(self.in_features, self.hidden_size)
+        self.embed_hist2 = nn.Linear(self.hidden_size, self.hidden_size)
 
         # Defining the transformer encoder
         self.encoder_layer = nn.TransformerEncoderLayer(d_model=self.hidden_size, nhead=config.nhead)
@@ -146,8 +147,9 @@ class TransformerLayer(BaseModule):
             x = torch.cat([x, mark], -1)
         
         out1 = self.embed_hist(x)
-        out2 = self.transformer_encoder(out1)
-        return out2
+        out2 = self.embed_hist(out1)
+        out3 = self.transformer_encoder(out2)
+        return out3
 
 
 class Hypernet(nn.Module):

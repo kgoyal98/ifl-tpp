@@ -30,7 +30,7 @@ embedding_size = 32               # Size of the sequence embedding vector
                                   # for the training sequences, and not for validation / test
 trainable_affine = False          # Train the final affine layer
 
-use_transformer_encoder = False   # Whether to use transformer to encode history
+use_transformer_encoder = True   # Whether to use transformer to encode history
 nhead = 8                         # Number of attention heads in the transformer layer
 num_layers = 6                    # Number of transformer encoders to be stacked
 
@@ -43,7 +43,7 @@ hypernet_hidden_sizes = []  # Number of units in MLP generating parameters ([] -
 # Polynomial
 max_degree = 3  # Maximum degree value for Sum-of-squares polynomial flow (SOS)
 n_terms = 4     # Number of terms for SOS flow
-# DSF / FullyNN
+# DSF / FullyNNregularization
 n_layers = 2    # Number of layers for Deep Sigmoidal Flow (DSF) / Fully Neural Network flow (Omi et al., 2019)
 layer_size = 64 # Number of mixture components / units in a layer for DSF and FullyNN
 
@@ -52,7 +52,7 @@ regularization = 1e-5 # L2 regularization parameter
 learning_rate = 1e-3  # Learning rate for Adam optimizer
 max_epochs = 1000     # For how many epochs to train
 display_step = 1      # Display training statistics after every display_step
-patience = 50         # After how many consecutive epochs without improvement of val loss to stop training
+patience = 100         # After how many consecutive epochs without improvement of val loss to stop training
 
 
 
